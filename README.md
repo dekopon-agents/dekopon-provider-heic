@@ -40,8 +40,10 @@ Stable payload-free error codes: `unsupported-capability`, `invalid-input`, `inv
 | Coded and displayed width/height | 1–512 each |
 | Pixels | 262144 |
 | Encoded PNG output | 524288 bytes, bounded writer |
-| Tested ordinary component budget | 350000000 fuel, 64 MiB linear memory, default 30s deadline |
+| Explicit component-test budget (not broker default) | 350000000 fuel, 64 MiB linear memory, default 30s deadline |
 | Input/output host envelopes | default 1 MiB each (base64 output fits) |
+
+The pinned core's real broker default is **8000000000 fuel (8B)**, not the tests' deliberately lower 350M. Current desired deployment configuration has no fuel override, so it inherits the 8B default; this is a configuration fact, not a live deployment test. **No production fuel budget has been approved for this provider**, and neither the default nor these fixture tests establish typical-photo support. No broker or deployment configuration is changed here.
 
 **Host isolation is mandatory for hostile bytes.** `heic-rs` checks primary declared pixels but does not propagate that ceiling into HEVC SPS/internal plane allocations; grids retain multiple decoded tiles. Container probing is not a memory guarantee. Wasmtime must enforce memory, fuel, deadline and wire ceilings. The native Rust entry point exists for trusted test fixtures only. No claim of decoder hardening/fuzz coverage or native-safe arbitrary input is made. Source buffers and errors are not logged by this provider.
 
@@ -51,7 +53,7 @@ Output is always 8-bit RGBA. Upstream decoder attempts HEIF `clap`/`irot`/`imir`
 
 ## Grants and integration blockers
 
-Owner configuration needs all of: Agent capability/provider catalog reach, a matching broker constraint set, Cedar authorization and route attachment delivery. No HTTP/storage grants are needed; no `chat.asset.read/write` grant exists in this ABI. Illustrative fragments, not a runnable deployment:
+Effective capability reach comes from the broker's capability answer for the authenticated principal/Agent context, backed by matching broker constraints and Cedar authorization; route attachment delivery is separately gated. In the pinned core, Agent catalog `capabilities`/`providers` fields are informational/inert, not an additional reach requirement or authorization grant. No HTTP/storage grants are needed; no `chat.asset.read/write` grant exists in this ABI. Illustrative fragments, not a runnable deployment:
 
 ```yaml
 # Broker constraintSets
@@ -76,7 +78,7 @@ Grant `agent.prompt` separately on that exact Agent to the intended principal vi
 
 Pinned [core fcb484bf17581735f47c89c1d7737729d28d6b6d](https://github.com/dekopon-agents/dekopon/tree/fcb484bf17581735f47c89c1d7737729d28d6b6d): `crates/dekopond/src/asset.rs` permits only PNG/JPEG/WebP/GIF at capability fetch; `crates/dekopon-agent/src/attachment.rs` expands only images and returns PNG attachments without reusable IDs. Therefore HEIC chat ingestion and downstream GPT editing remain **blocked on separately authorized core work**. Do not add HEIC to model-readable images as a shortcut. This repository changes no core/deployment code.
 
-Typical phone-photo configuration cannot responsibly be recommended from these tests: 512 KiB/512x512 exclude most camera images. Raising limits requires independent camera/grid/Main10/orientation fixtures, decoder resource validation, a bounded gateway input/output bridge and owner-approved larger budgets. Current limits are experimental, not a general conversion service.
+Typical phone-photo configuration cannot responsibly be recommended from these tests: 512 KiB/512x512 exclude most camera images. Raising limits requires independent camera/grid/Main10/orientation fixtures, decoder resource validation, a bounded gateway input/output bridge and owner-approved budgets. Current limits are experimental, not a general conversion service.
 
 ## Build and verify
 
@@ -97,7 +99,7 @@ No component path means tests fail, never skip. Component test asserts zero impo
 
 Observed locally on Apple Silicon / Wasmtime 48.0.2:
 - 64x64 solid: native and 350M-fuel/64MiB component success; PNG 181 bytes; max RGB difference 2 vs independent Apple decode.
-- 512x512 gradient: native success, PNG 149324 bytes; max RGB difference 5. Component **exhausts 350M** (about 63ms) and 700M fuel. A one-off diagnostic succeeded with 1.4B fuel, unchanged 64MiB, in 248ms under a 60s outer timeout (host deadline 30s). This did not change defaults; routine tests retain 350M refusal.
+- 512x512 gradient: native success, PNG 149324 bytes; max RGB difference 5. Component **exhausts 350M** (about 63ms) and 700M fuel. A one-off diagnostic succeeded with 1.4B fuel, unchanged 64MiB, in 248ms under a 60s outer timeout (host deadline 30s). This did not change defaults; routine tests retain refusal at the explicit 350M test budget, not the real broker's 8B default.
 - 1M fuel: describe succeeds; 64x64 invoke traps specifically for exhausted fuel.
 
 These are fixture-specific outcomes, not measured peak memory/fuel consumption or photo-performance forecasts. Full remote CI, cross-machine reproducibility, fuzzing, camera coverage and deployment are not established. CI runs on main/PR only; no tags, release workflow or publication is configured here.

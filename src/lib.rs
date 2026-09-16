@@ -118,6 +118,7 @@ impl Provider for HeicProvider {
         }
         let result = cli::run_command(Command::new("heic").version(env!("CARGO_PKG_VERSION"))
             .about("Experimental HEIC to PNG: 512 KiB input/output, 512x512, 262144 pixels; no file or URL access")
+            .after_help("Generated PNGs have no reusable chat asset references and cannot currently chain to GPT Image edit.")
             .arg(Arg::new("source").required(true).help("HEIC data URL or chat-asset:N (gateway expansion currently blocks HEIC)")), argv, stdin, |matches, stdin| {
             if stdin.is_some() { return Err(error("invalid-input", "stdin is unsupported; supply one source argument")); }
             Ok(CommandInvocation { capability: CONVERT.parse().expect("static ID"),

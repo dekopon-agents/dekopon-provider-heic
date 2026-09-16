@@ -181,6 +181,9 @@ async fn heic_convert_runs_in_bounded_broker_component() -> Result<(), Box<dyn s
     };
     assert_eq!(status, 0);
     assert!(stdout.contains("512"));
+    let help = stdout.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(help.contains("Generated PNGs have no reusable chat asset references"));
+    assert!(help.contains("cannot currently chain to GPT Image edit"));
     // A store can describe the provider yet lacks fuel for even this small valid decode.
     let constrained = FakeBroker::builder()
         .component(&component)
