@@ -1,0 +1,4 @@
+/target/
+/dist/
+/heic-provider.wasm
+/heic-provider.wasm.sha256
