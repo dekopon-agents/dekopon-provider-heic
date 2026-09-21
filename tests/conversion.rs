@@ -1,4 +1,6 @@
-use dekopon_provider_sdk_testkit::{CommandRunOutcome, FakeBroker};
+use dekopon_provider_sdk_testkit::{
+    BrokerHostError, CommandRunOutcome, FakeBroker, FakeBrokerError,
+};
 use serde_json::json;
 
 #[tokio::test]
@@ -35,14 +37,18 @@ async fn component_contract_and_pure_handle_proposal() -> Result<(), Box<dyn std
     assert_eq!(capability.as_str(), "heic.convert");
     assert_eq!(input, json!({"source":"chat-asset:1"}));
     assert!(secret_use.is_none());
-    // Testkit has no input descriptors/asset grant builder. Missing input must fail, never decode.
+    // Testkit has no input descriptors/asset grant builder. The broker rejects the missing
+    // descriptor before the guest runs; this is not a successful asset-open/decode test.
     let missing = broker.invoke("heic.convert", input).await.unwrap_err();
-    assert!(
-        matches!(
-            missing.provider_failure().map(|(code, _)| code),
-            Some("unknown-reference" | "unconfigured")
-        ),
-        "{missing:?}"
+    let FakeBrokerError::Invocation(failure) = &missing else {
+        panic!("expected asset admission failure, got {missing:?}");
+    };
+    let BrokerHostError::AssetInput { source } = failure.error.as_ref() else {
+        panic!("expected asset admission failure, got {missing:?}");
+    };
+    assert_eq!(
+        source.to_string(),
+        "asset descriptor count does not match references"
     );
     assert!(
         broker
