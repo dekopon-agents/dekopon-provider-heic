@@ -1,5 +1,6 @@
 use super::*;
 use dekopon_provider_sdk::asset::Info;
+use dekopon_provider_sdk::provider;
 use std::cell::RefCell;
 
 struct Fake {
@@ -27,7 +28,7 @@ impl Fake {
             fail: None,
         }
     }
-    fn call(&self, name: &'static str) -> Result<(), ProviderError> {
+    fn call(&self, name: &'static str) -> Result<(), HeicError> {
         self.calls.borrow_mut().push(name);
         if self.fail == Some(name) {
             Err(error("denied", "fake failure"))
@@ -36,31 +37,31 @@ impl Fake {
         }
     }
 }
-impl Assets for Fake {
+impl AssetAccess for Fake {
     type Input = ();
     type Output = ();
-    fn open(&self, r: &str) -> Result<(), ProviderError> {
+    fn open(&self, r: &str) -> Result<(), HeicError> {
         assert_eq!(r, "chat-asset:1");
         self.call("open")
     }
     fn info(&self, _: &()) -> Info {
         self.info.clone()
     }
-    fn read_all(&self, _: &()) -> Result<Vec<u8>, ProviderError> {
+    fn read_all(&self, _: &()) -> Result<Vec<u8>, HeicError> {
         self.call("read_all")?;
         Ok(self.bytes.clone())
     }
-    fn allocate(&self, ty: &str, encoding: Encoding) -> Result<(), ProviderError> {
+    fn allocate(&self, ty: &str, encoding: Encoding) -> Result<(), HeicError> {
         assert_eq!(ty, "image/png");
         assert!(matches!(encoding, Encoding::Identity));
         self.call("allocate")
     }
-    fn write_all(&self, _: &(), bytes: &[u8]) -> Result<(), ProviderError> {
+    fn write_all(&self, _: &(), bytes: &[u8]) -> Result<(), HeicError> {
         self.call("write_all")?;
         self.output.replace(bytes.to_vec());
         Ok(())
     }
-    fn attach(&self, _: ()) -> Result<Info, ProviderError> {
+    fn attach(&self, _: ()) -> Result<Info, HeicError> {
         self.call("attach")?;
         Ok(Info {
             id: None,
@@ -72,12 +73,18 @@ impl Assets for Fake {
         })
     }
 }
-fn invoke(f: &Fake) -> Result<Value, ProviderError> {
-    invoke_with(
-        &CONVERT.parse().unwrap(),
-        json!({"source":"chat-asset:1"}),
+fn invoke(f: &Fake) -> Result<Value, HeicError> {
+    convert_with(
+        Input {
+            source: "chat-asset:1".into(),
+        },
         f,
     )
+}
+fn checked(input: Value, f: &Fake) -> Result<Value, HeicError> {
+    let input = serde_json::from_value(input)
+        .map_err(|_| error("invalid-input", "expected only a string source field"))?;
+    convert_with(input, f)
 }
 fn assert_reference(bytes: &[u8], reference: &[u8], dimension: u32, tolerance: u8) {
     let decode = |bytes: &[u8]| {
@@ -166,17 +173,9 @@ fn closed_input_and_reference_validation_precede_imports() {
         json!({"source":"chat-asset:-1"}),
         json!({"source":"chat-asset:18446744073709551616"}),
     ] {
-        let e = invoke_with(&CONVERT.parse().unwrap(), input, &f).unwrap_err();
+        let e = checked(input, &f).unwrap_err();
         assert!(!format!("{e:?}").contains("PRIVATE"));
     }
-    assert!(
-        invoke_with(
-            &"heic.other".parse().unwrap(),
-            json!({"source":"chat-asset:1"}),
-            &f
-        )
-        .is_err()
-    );
     assert!(f.calls.borrow().is_empty());
 }
 #[test]
@@ -194,6 +193,9 @@ fn input_ceiling_is_checked_before_read_and_against_decoded_bytes() {
             assert!(format!("{:?}", invoke(&f).unwrap_err()).contains("input-limit"));
         }
         assert!(!f.calls.borrow().contains(&"read_all"));
+        f.info.stored_bytes = Some(limit as u64);
+        assert!(format!("{:?}", invoke(&f).unwrap_err()).contains("invalid-heic"));
+        assert!(f.calls.borrow().contains(&"read_all"));
     }
     let mut f = Fake::new(&vec![0; MAX_INPUT_BYTES + 1]);
     f.info.stored_bytes = Some(MAX_INPUT_BYTES as u64);
@@ -229,10 +231,10 @@ fn invalid_truncated_and_oversized_dimensions_refuse_before_allocation() {
         let f = Fake::new(&bytes);
         assert!(format!("{:?}", invoke(&f).unwrap_err()).contains("dimension-limit"));
     }
-    for (w, h) in [(1352, 2185), (4096, 4096)] {
+    for (w, h) in [(1, 1), (1352, 2185), (4096, 4096)] {
         assert!(dimensions(w, h).is_ok());
     }
-    for (w, h) in [(0, 1), (1, 0), (4097, 1), (u32::MAX, u32::MAX)] {
+    for (w, h) in [(0, 1), (1, 0), (4097, 1), (1, 4097), (u32::MAX, u32::MAX)] {
         assert!(dimensions(w, h).is_err());
     }
 }
@@ -243,20 +245,56 @@ fn bounded_output_and_manifest_contract() {
     w.write_all(&[1]).unwrap();
     assert_eq!(w.0.len(), MAX_OUTPUT_BYTES);
     assert!(w.write_all(&[2]).is_err());
+    let manifest = provider::manifest::<HeicProvider>().unwrap();
+    assert_eq!(manifest.capabilities.len(), 1);
     assert_eq!(
-        include_str!("../wit/deps/provider.wit"),
-        dekopon_provider_sdk::PROVIDER_WIT
+        manifest.capabilities[0].input_schema["additionalProperties"],
+        false
     );
-    assert_eq!(
-        include_str!("../wit/deps/asset.wit"),
-        dekopon_provider_sdk::ASSET_WIT
-    );
-    assert_eq!(
-        HeicProvider::manifest().capabilities[0].input_schema["properties"]["source"]["pattern"],
-        "^chat-asset:"
-    );
-    assert!(matches!(
-        HeicProvider::manifest().capabilities[0].effect,
-        EffectKind::LocalWrite
-    ));
+    assert_eq!(manifest.capabilities[0].effect, EffectKind::LocalWrite);
+    assert_eq!(manifest.capabilities[0].risk, RiskLevel::Low);
+}
+#[test]
+fn stdout_has_one_newline_and_closed_pipe_fails() {
+    let mut output = Vec::new();
+    let value = json!({"format":"png","assetNote":{"id":null}});
+    emit(&value, &mut output).unwrap();
+    let mut expected = serde_json::to_vec(&value).unwrap();
+    expected.push(b'\n');
+    assert_eq!(output, expected);
+    struct Closed;
+    impl Write for Closed {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "secret",
+            ))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let e = emit(&value, &mut Closed).unwrap_err();
+    assert_eq!(e.code, "output-closed");
+    assert!(!e.to_string().contains("secret"));
+}
+#[test]
+fn command_requires_one_reference_and_no_stdin() {
+    use dekopon_provider_sdk::CommandRunOutcome;
+    for (argv, piped) in [
+        (vec!["chat-asset:1".into()], true),
+        (vec!["https://example.com/a".into()], false),
+        (vec!["chat-asset:1".into(), "chat-asset:2".into()], false),
+    ] {
+        assert!(matches!(
+            provider::command::<HeicProvider>(&argv, piped),
+            CommandRunOutcome::Failed { .. } | CommandRunOutcome::Rendered { status: 2, .. }
+        ));
+    }
+    let CommandRunOutcome::Proposed { input, .. } =
+        provider::command::<HeicProvider>(&["chat-asset:18446744073709551615".into()], false)
+    else {
+        panic!("max u64 reference")
+    };
+    assert_eq!(input["source"], "chat-asset:18446744073709551615");
 }
