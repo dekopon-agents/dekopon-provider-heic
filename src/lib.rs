@@ -26,7 +26,7 @@ const MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
     after_help = "Host resource limits may refuse smaller images. Attaches a reusable asset; use asset send to deliver it."
 )]
 pub struct HeicArgs {
-    /// A positional chat-asset:<N> reference, not a URL or path
+    /// A positional `chat-asset:<N>` reference, not a URL or path
     #[arg(value_name = "SOURCE")]
     source: Option<String>,
 }
@@ -34,7 +34,7 @@ pub struct HeicArgs {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Input {
-    /// chat-asset:<N>; at most 512 KiB decoded HEIC input
+    /// `chat-asset:<N>`; at most 512 KiB decoded HEIC input
     #[schemars(length(min = 12, max = 31), regex(pattern = "^chat-asset:[0-9]+$"))]
     source: String,
 }
