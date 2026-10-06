@@ -1,43 +1,63 @@
 //! Bounded HEIC conversion through broker-owned assets. Host isolation is mandatory for decoding.
 mod assets;
-use assets::{Assets, Host};
-use dekopon_provider_sdk::{
-    CapabilityId, CommandInvocation, CommandRun, EffectKind, Provider, ProviderApiVersion,
-    ProviderCapability, ProviderError, ProviderManifest, RiskLevel,
-    asset::Encoding,
-    clap::{Arg, Command},
-    cli,
+use assets::{AssetAccess, Host};
+use clap::Parser;
+use dekopon_provider_sdk::asset::Encoding;
+use dekopon_provider_sdk::provider::{
+    Assets, Capability, Code, Failure, Proposal, Provider, Stdout, Usage,
 };
-use serde::Deserialize;
+use dekopon_provider_sdk::{EffectKind, RiskLevel};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::io::Write;
+use std::{fmt, io::Write};
 
-const CONVERT: &str = "heic.convert";
 const MAX_INPUT_BYTES: usize = 524_288;
-const MAX_SOURCE: usize = 31; // chat-asset: followed by at most twenty decimal digits.
+const MAX_SOURCE: usize = 31;
 const MAX_DIMENSION: u32 = 4096;
 const MAX_PIXELS: u64 = 16_777_216;
 const MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 
-#[allow(unsafe_code)]
-mod bindings {
-    wit_bindgen::generate!({path: "wit", world: "provider", generate_all});
-}
-#[allow(unsafe_code)]
-mod export {
-    use super::bindings;
-    dekopon_provider_sdk::export_provider_with_cli!(super::HeicProvider, bindings);
+#[derive(Parser)]
+#[command(
+    name = "heic",
+    version,
+    about = "HEIC asset to PNG: 512 KiB input, 8 MiB output, 4096x4096, 16777216 pixels",
+    after_help = "Host resource limits may refuse smaller images. Attaches a reusable asset; use asset send to deliver it."
+)]
+pub struct HeicArgs {
+    /// A positional chat-asset:<N> reference, not a URL or path
+    #[arg(value_name = "SOURCE")]
+    source: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct Input {
+pub struct Input {
+    /// chat-asset:<N>; at most 512 KiB decoded HEIC input
+    #[schemars(length(min = 12, max = 31), regex(pattern = "^chat-asset:[0-9]+$"))]
     source: String,
 }
-fn error(code: &str, message: &str) -> ProviderError {
-    ProviderError::new(code, message)
+
+#[derive(Debug)]
+pub struct HeicError {
+    code: &'static str,
+    message: &'static str,
 }
-fn reference(source: &str) -> Result<(), ProviderError> {
+impl fmt::Display for HeicError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.message)
+    }
+}
+impl Failure for HeicError {
+    fn code(&self) -> Code {
+        Code::new(self.code)
+    }
+}
+fn error(code: &'static str, message: &'static str) -> HeicError {
+    HeicError { code, message }
+}
+fn reference(source: &str) -> Result<(), HeicError> {
     let digits = source.strip_prefix("chat-asset:").unwrap_or("");
     if source.len() > MAX_SOURCE
         || digits.is_empty()
@@ -54,67 +74,48 @@ fn reference(source: &str) -> Result<(), ProviderError> {
 
 /// Provider entry point; native decoding is intended for trusted test fixtures only.
 pub struct HeicProvider;
+/// One local attachment, never a send.
+pub struct Convert;
 impl Provider for HeicProvider {
-    fn manifest() -> ProviderManifest {
-        ProviderManifest {
-            api_version: ProviderApiVersion::V1Alpha1,
-            id: "heic".parse().expect("static ID"),
-            description: "Experimental bounded HEIC asset to reusable PNG asset".into(),
-            command_words: vec!["heic".into()],
-            capabilities: vec![ProviderCapability {
-                id: CONVERT.parse().expect("static ID"),
-                description: "Decode at most 512 KiB HEIC, 4096x4096 / 16777216 pixels, into at most 8 MiB PNG. Host resource limits may refuse smaller images. Attaches without sending.".into(),
-                effect: EffectKind::LocalWrite, risk: RiskLevel::Low,
-                input_schema: json!({"type":"object", "required":["source"], "additionalProperties":false,
-                    "properties":{"source":{"type":"string","minLength":12,"maxLength":MAX_SOURCE,
-                    "pattern":"^chat-asset:","description":"chat-asset:<N>; at most 512 KiB decoded HEIC input."}}}),
-            }],
-        }
-    }
-    fn invoke(capability: &CapabilityId, input: Value) -> Result<Value, ProviderError> {
-        invoke_with(capability, input, &Host)
-    }
-    fn run_command(argv: &[String], stdin: Option<&str>) -> Result<CommandRun, ProviderError> {
-        if argv.len() > 3 || argv.iter().any(|arg| arg.len() > MAX_SOURCE) {
-            return Err(error(
-                "input-limit",
-                "command exceeds bounded argument limits",
+    const ID: &'static str = "heic";
+    const COMMAND_WORDS: &'static [&'static str] = &["heic"];
+    const DESCRIPTION: &'static str = "Experimental bounded HEIC asset to reusable PNG asset";
+    type Args = HeicArgs;
+    type Capabilities = (Convert,);
+    fn propose(args: Self::Args, stdin_piped: bool) -> Result<Proposal<Self>, Usage> {
+        if stdin_piped {
+            return Err(Usage::new(
+                "stdin is unsupported; supply one source argument",
             ));
         }
-        let result = cli::run_command(Command::new("heic").version(env!("CARGO_PKG_VERSION"))
-            .about("HEIC asset to PNG: 512 KiB input, 8 MiB output, 4096x4096, 16777216 pixels")
-            .after_help("Host resource limits may refuse smaller images. Attaches a reusable asset; use asset send to deliver it.")
-            .arg(Arg::new("source").required(true).help("chat-asset:<N>")), argv, stdin, |matches, stdin| {
-                if stdin.is_some() { return Err(error("invalid-input", "stdin is unsupported; supply one source argument")); }
-                let source = matches.get_one::<String>("source").expect("required argument");
-                reference(source)?;
-                Ok(CommandInvocation { capability: CONVERT.parse().expect("static ID"), input: json!({"source":source}), secret_use: None })
-            })?;
-        // Never reflect an invalid input payload through clap's usage rendering.
-        Ok(match result {
-            CommandRun::Rendered { status, .. } if status != 0 => CommandRun::Rendered {
-                stdout: String::new(),
-                stderr: "Usage: heic <chat-asset:N>; use heic --help for limits\n".into(),
-                status,
-            },
-            other => other,
-        })
+        let source = args
+            .source
+            .ok_or_else(|| Usage::new("supply one positional chat-asset:<N> reference"))?;
+        reference(&source).map_err(|_| Usage::new("source must be chat-asset:<N>"))?;
+        Ok(Proposal::to::<Convert>(Input { source }))
     }
 }
-
-fn invoke_with(
-    capability: &CapabilityId,
-    input: Value,
-    assets: &impl Assets,
-) -> Result<Value, ProviderError> {
-    if capability.as_str() != CONVERT {
-        return Err(error(
-            "unsupported-capability",
-            "only heic.convert is supported",
-        ));
+impl Capability for Convert {
+    type Provider = HeicProvider;
+    const NAME: &'static str = "convert";
+    const DESCRIPTION: &'static str = "Decode at most 512 KiB HEIC, 4096x4096 / 16777216 pixels, into at most 8 MiB PNG. Host resource limits may refuse smaller images. Attaches without sending.";
+    const EFFECT: EffectKind = EffectKind::LocalWrite;
+    const RISK: RiskLevel = RiskLevel::Low;
+    type Input = Input;
+    type Needs = Assets;
+    type Error = HeicError;
+    fn run(input: Input, assets: Assets, out: &mut Stdout) -> Result<(), HeicError> {
+        let value = convert_with(input, &Host(assets))?;
+        emit(&value, out)
     }
-    let input: Input = serde_json::from_value(input)
-        .map_err(|_| error("invalid-input", "expected only a string source field"))?;
+}
+fn emit(value: &Value, out: &mut impl Write) -> Result<(), HeicError> {
+    serde_json::to_writer(&mut *out, value)
+        .map_err(|_| error("output-closed", "stdout's reader has gone"))?;
+    out.write_all(b"\n")
+        .map_err(|_| error("output-closed", "stdout's reader has gone"))
+}
+fn convert_with(input: Input, assets: &impl AssetAccess) -> Result<Value, HeicError> {
     reference(&input.source)?;
     let handle = assets.open(&input.source)?;
     let info = assets.info(&handle);
@@ -122,7 +123,6 @@ fn invoke_with(
         Encoding::Identity => MAX_INPUT_BYTES,
         Encoding::Base64 => MAX_INPUT_BYTES.div_ceil(3) * 4,
     };
-    // Bound read_all's reservation before reading. Gateway-provided file lengths are known.
     if info.stored_bytes.is_none_or(|n| n > stored_limit as u64) {
         return Err(error(
             "input-limit",
@@ -183,8 +183,7 @@ fn invoke_with(
         "assetNote":{"id":attached.id,"contentType":attached.content_type,"bytes":attached.stored_bytes}}),
     )
 }
-
-fn dimensions(width: u32, height: u32) -> Result<(), ProviderError> {
+fn dimensions(width: u32, height: u32) -> Result<(), HeicError> {
     if width == 0
         || height == 0
         || width > MAX_DIMENSION
@@ -211,6 +210,10 @@ impl Write for BoundedOutput {
         Ok(())
     }
 }
-
+#[cfg(target_arch = "wasm32")]
+#[allow(unsafe_code)]
+mod guest {
+    dekopon_provider_sdk::export!(super::HeicProvider);
+}
 #[cfg(test)]
 mod tests;
