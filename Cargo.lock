@@ -607,7 +607,7 @@ dependencies = [
 
 [[package]]
 name = "dekopon-heic-provider"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "clap",
  "dekopon-provider-sdk",

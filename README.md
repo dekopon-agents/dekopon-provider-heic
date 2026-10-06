@@ -1,11 +1,11 @@
-# HEIC provider 0.2.0 — experimental bounded conversion
+# HEIC provider 0.3.0 — experimental bounded conversion
 
 `heic.convert` reads a broker-owned HEIC asset and attaches a reusable RGBA8 PNG asset. Command word `heic`; effect **local-write**, risk **Low**. Uses Dekopon SDK/testkit 0.34.0 and the stdio provider interface. No filesystem paths, network requests, subprocesses, credentials or durable storage.
 
 ```sh
 heic chat-asset:1
-# After the gateway reports the new reference:
-asset send 2
+# If separately authorized, send the actual reference reported by the gateway:
+asset send <returned-asset-id>
 ```
 
 Input is exactly `{"source":"chat-asset:1"}`. Only `chat-asset:<N>` references are accepted; data URLs, bare base64, paths, URLs, extra fields and stdin are refused. `run-command` is pure; the gateway passes referenced descriptors separately when authorizing `invoke`. Listing metadata does not grant access to unrelated references.
