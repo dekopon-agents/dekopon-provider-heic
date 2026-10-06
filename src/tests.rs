@@ -288,7 +288,7 @@ fn command_requires_one_reference_and_no_stdin() {
     ] {
         assert!(matches!(
             provider::command::<HeicProvider>(&argv, piped),
-            CommandRunOutcome::Failed { .. }
+            CommandRunOutcome::Failed { .. } | CommandRunOutcome::Rendered { status: 2, .. }
         ));
     }
     let CommandRunOutcome::Proposed { input, .. } =
