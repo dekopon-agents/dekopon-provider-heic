@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.1] - 2026-10-08
+
+- Update the Dekopon SDK and testkit pins to 0.36.0; keep the HEIC command and component interface unchanged.
+
 ## [0.3.0] - 2026-10-06
 
 - Move heic.convert to typed stdio proposals and JSON-line receipts while preserving bounded asset attachment.
