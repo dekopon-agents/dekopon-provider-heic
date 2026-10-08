@@ -1,6 +1,6 @@
-# HEIC provider 0.3.0 — experimental bounded conversion
+# HEIC provider 0.3.1 — experimental bounded conversion
 
-`heic.convert` reads a broker-owned HEIC asset and attaches a reusable RGBA8 PNG asset. Command word `heic`; effect **local-write**, risk **Low**. Uses Dekopon SDK/testkit 0.34.0 and the stdio provider interface. No filesystem paths, network requests, subprocesses, credentials or durable storage.
+`heic.convert` reads a broker-owned HEIC asset and attaches a reusable RGBA8 PNG asset. Command word `heic`; effect **local-write**, risk **Low**. Uses Dekopon SDK/testkit 0.36.0 and the stdio provider interface. No filesystem paths, network requests, subprocesses, credentials or durable storage.
 
 ```sh
 heic chat-asset:1
@@ -62,6 +62,6 @@ cargo clippy --locked --package dekopon-heic-provider --lib --target wasm32-unkn
 DEKOPON_PROVIDER_COMPONENT="$PWD/heic-provider.wasm" cargo test --locked
 ```
 
-Component ABI is wasm32-unknown-unknown (not WASI), with only `dekopon:asset/asset@0.1.0` and `dekopon:stdio/streams@0.1.0` imports and the provider 0.4 describe/invoke/run-command exports. SDK/testkit are crates.io `=0.34.0`. CI/release uses provider-workflows at its effective `main` revision.
+Component ABI is wasm32-unknown-unknown (not WASI), with only `dekopon:asset/asset@0.1.0` and `dekopon:stdio/streams@0.1.0` imports and the provider 0.4 describe/invoke/run-command exports. SDK/testkit are crates.io `=0.36.0`. CI/release uses provider-workflows at its effective `main` revision.
 
 Native fake-asset tests exercise the complete open/read/allocate/write/attach path, independent pixel references, input bounds, truncation, dimensions, output bounds and fail-fast import errors. Component tests require `DEKOPON_PROVIDER_COMPONENT`, verify imports/exports, pure proposals/help and missing-reference refusal. The published testkit has no asset-input builder, so component tests do not claim a successful asset conversion or the historical data-URL fuel measurements. Fixture provenance is in `tests/fixtures/README.md`.
